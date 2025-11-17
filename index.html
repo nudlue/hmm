@@ -2,33 +2,30 @@
 <html lang="ko">
 <head>
   <meta charset="UTF-8" />
-  <title>Sound Classifier Demo</title>
-  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@3.20.0/dist/tf.min.js"></script>
+  <title>실시간 소리 분류기</title>
+
+  <!-- TensorFlow.js -->
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@2.0.0"></script>
+
+  <!-- Teachable Machine Sound -->
+  <script src="https://cdn.jsdelivr.net/npm/@teachablemachine/sound@0.8/dist/teachablemachine-sound.min.js"></script>
+
   <style>
-    body {
-      font-family: sans-serif;
-      text-align: center;
-      padding: 40px;
-      background: #f7f7f7;
-    }
+    body { font-family: sans-serif; text-align: center; padding: 40px; }
     button {
-      padding: 12px 24px;
+      padding: 12px 24px; 
       font-size: 20px;
-      margin: 10px;
       cursor: pointer;
+      margin: 10px;
     }
-    #result {
-      margin-top: 30px;
-      font-size: 30px;
-    }
-    #emoji {
-      font-size: 80px;
-      margin-top: 10px;
-    }
+    #result { margin-top: 30px; font-size: 30px; }
+    #emoji { font-size: 80px; margin-top: 10px; }
   </style>
+
 </head>
 
 <body>
+
   <h1>🔊 실시간 소리 분류기</h1>
 
   <button id="startBtn">녹음 시작</button>
@@ -38,94 +35,77 @@
   <div id="emoji">😶</div>
 
   <script>
-    let model;
-    let listening = false;
-    let audioContext, analyser, microphone, dataArray, stream;
-    let rafId = null;
+    // 모델 파일은 index.html과 같은 폴더에 둠
+    const URL = "./";
+    let model, mic, isListening = false;
+    let loopId;
 
-    const labels = ["Baby Crying", "Doorbell", "Fire Alarm", "배경 소음"];
     const emojis = {
       "Baby Crying": "👶😭",
       "Doorbell": "🚪🔔",
       "Fire Alarm": "🔥🚨",
-      "배경 소음": "🌫️"
+      "배경 소음": "🌫️",
     };
 
     // 1) 모델 로드
     async function loadModel() {
-      model = await tf.loadLayersModel("model.json");
-      console.log("Model loaded!");
+      model = await tmSound.create(
+        URL + "model.json",
+        URL + "metadata.json"
+      );
+      console.log("TM 모델 로드 완료");
     }
+    loadModel();
 
     // 2) 녹음 시작
     async function startRecording() {
-      if (listening) return;
-      listening = true;
+      if (isListening) return;
+      isListening = true;
 
-      audioContext = new AudioContext();
-      stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      microphone = audioContext.createMediaStreamSource(stream);
-
-      analyser = audioContext.createAnalyser();
-      analyser.fftSize = 1024;
-      dataArray = new Float32Array(analyser.fftSize);
-      microphone.connect(analyser);
+      mic = new tmSound.Microphone();
+      await mic.open();   // 마이크 접근
+      console.log("마이크 연결됨");
 
       loop();
     }
 
     // 3) 녹음 종료
     function stopRecording() {
-      if (!listening) return;
-      listening = false;
+      if (!isListening) return;
+      isListening = false;
 
-      if (rafId) cancelAnimationFrame(rafId);
-
-      if (stream) {
-        stream.getTracks().forEach(track => track.stop());
-      }
-
-      if (audioContext) {
-        audioContext.close();
-      }
+      if (loopId) cancelAnimationFrame(loopId);
+      if (mic) mic.close();   // TM 방식에서는 close()만 해도 됨
 
       document.getElementById("result").innerText = "녹음이 종료되었습니다.";
       document.getElementById("emoji").innerText = "😴";
     }
 
-    // 4) 반복 loop
+    // 4) 실시간 분류 loop
     async function loop() {
-      if (!listening) return;
+      if (!isListening) return;
 
-      analyser.getFloatTimeDomainData(dataArray);
+      const prediction = await model.predict(mic);
 
-      // Teachable Machine audio preprocessing (STFT)
-      let input = tf.tensor(dataArray).slice([0], [996]); 
-      input = tf.signal.stft(input, 256, 128);           
-      input = tf.abs(input).expandDims(-1);              
-      input = tf.image.resizeBilinear(input, [43, 232]); 
-      input = input.expandDims(0);                       
+      // 가장 높은 점수 찾기
+      let bestIdx = 0;
+      for (let i = 1; i < prediction.length; i++) {
+        if (prediction[i].score > prediction[bestIdx].score) {
+          bestIdx = i;
+        }
+      }
 
-      const prediction = model.predict(input);
-      const scores = await prediction.data();
-      const idx = scores.indexOf(Math.max(...scores));
+      const label = prediction[bestIdx].className;
 
-      updateUI(labels[idx]);
-
-      rafId = requestAnimationFrame(loop);
-    }
-
-    // 5) UI 업데이트
-    function updateUI(label) {
       document.getElementById("result").innerText = `인식 결과: ${label}`;
-      document.getElementById("emoji").innerText = emojis[label];
+      document.getElementById("emoji").innerText = emojis[label] || "🎧";
+
+      loopId = requestAnimationFrame(loop);
     }
 
-    // 버튼 연결
     document.getElementById("startBtn").onclick = startRecording;
     document.getElementById("stopBtn").onclick = stopRecording;
 
-    loadModel();
   </script>
 </body>
 </html>
